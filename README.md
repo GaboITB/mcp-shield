@@ -77,6 +77,58 @@ py -3 -m mcp_shield approve my-mcp
 py -3 -m mcp_shield report
 ```
 
+## Continuous Monitoring
+
+MCP Shield is designed to be used both manually and as part of an automated workflow.
+
+### Recommended workflow
+
+1. **Before installing a new MCP**, scan it:
+   ```bash
+   mcp-shield scan https://github.com/user/new-mcp --name new-mcp
+   ```
+
+2. **If the grade is acceptable**, approve it to create a baseline:
+   ```bash
+   mcp-shield approve new-mcp
+   ```
+
+3. **Periodically check** if your approved MCPs have changed (rug pull detection):
+   ```bash
+   mcp-shield live --all
+   ```
+
+4. **After a MCP update**, re-scan to verify the new version:
+   ```bash
+   mcp-shield scan /path/to/updated-mcp --name my-mcp
+   ```
+
+### Automated daily checks
+
+You can automate step 3 and version monitoring with a cron job or scheduled task:
+
+```bash
+# Check for npm version changes and re-scan if needed
+npm view @user/mcp-server version  # compare with installed
+mcp-shield scan /path/to/mcp --name my-mcp  # re-scan if changed
+
+# Check for rug pulls on all approved MCPs
+mcp-shield live --all
+```
+
+**Linux (cron):**
+```bash
+# Run daily at 10:00
+0 10 * * * /usr/bin/python3 -m mcp_shield live --all >> ~/.config/mcp-shield/watch.log 2>&1
+```
+
+**Windows (Task Scheduler):**
+```powershell
+$action = New-ScheduledTaskAction -Execute 'py' -Argument '-3 -m mcp_shield live --all'
+$trigger = New-ScheduledTaskTrigger -Daily -At '10:00'
+Register-ScheduledTask -TaskName 'MCP Shield Watch' -Action $action -Trigger $trigger
+```
+
 ## Exit Codes
 
 | Code | Meaning |
