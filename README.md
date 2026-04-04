@@ -34,6 +34,12 @@ MCP Shield scans MCP servers **before installation** to detect supply chain atta
 No external dependencies required — stdlib only (Python 3.10+).
 
 ```bash
+pip install mcp-shield-audit
+```
+
+Or from source:
+
+```bash
 git clone https://github.com/GaboITB/mcp-shield.git
 cd mcp-shield
 ```
