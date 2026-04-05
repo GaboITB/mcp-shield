@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-04-05
+
+### Added
+- Context-aware detection pipeline: FileClassifier + ContextRefiner post-process findings to eliminate false positives
+- Confidence score (0.0-1.0) on every Finding, with effective_weight for scoring
+- 3 scan modes: --audit (show all), --strict (HIGH+ conf>=0.7 for CI/CD), default (conf>=0.5)
+- --min-confidence flag for custom confidence threshold
+- Shannon entropy filter for secrets (low-entropy strings filtered as placeholders)
+- Typosquatting detector via Levenshtein distance against 300+ popular npm/PyPI packages
+- shell=variable detection: flags shell=use_shell where value is not a literal
+- GCP/Azure secret detection activated with context-aware check
+
+### Changed
+- postinstall_script: prepare npm run build reclassified as INFO (was CRITICAL)
+- prompt_injection: graduated severity, conviction patterns stay CRITICAL, benign imperatives suppressed
+- shell_injection: method definitions suppressed, allowShell ignored, --force only in git context
+- tls_disabled: INFO in test files (was HIGH)
+- credential_in_args: LOW when env var alternative exists in same file
+- unpinned_dependency: INFO when lockfile present
+- OpenAI/Stripe regex overlap fixed
+- Dead regex removed (Heroku UUID, Algolia hex32)
+- GitHub Action reference updated v2 to v3
+
+## [3.0.0] - 2026-04-05
+
 ### Added
 - MCP Resources scanner — detects prompt injection via resource URIs, descriptions, MIME types (dangerous schemes, internal URIs, wildcard patterns, executable MIME)
 - MCP Prompts scanner — detects injection in prompt descriptions, argument descriptions, and long default values
