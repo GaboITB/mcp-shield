@@ -1,4 +1,4 @@
-"""SSRF (Server-Side Request Forgery) detector for MCP Shield v2.
+"""SSRF (Server-Side Request Forgery) detector for MCP Shield v3.
 
 Detects HTTP requests with dynamic or environment-sourced URLs:
 - Python: requests, urllib, httpx, aiohttp
@@ -48,16 +48,37 @@ RE_JS_SUPERAGENT = re.compile(
 )
 RE_JS_REQUEST_LIB = re.compile(r"""\brequest\s*\(""")
 
-# Dynamic URL indicators
-RE_FSTRING = re.compile(r"""f["'][^"']*\{[^}]+\}""")
-RE_FORMAT_CALL = re.compile(r"""\.format\s*\(""")
-RE_TEMPLATE_LITERAL = re.compile(r"""`[^`]*\$\{[^}]+\}[^`]*`""")
-RE_CONCAT = re.compile(r"""\+\s*\w+""")
+# JS/TS low-level network -- net, dgram, tls, dns
+RE_JS_NET_CONNECT = re.compile(r"""\bnet\.(?:connect|createConnection|Socket)\s*\(""")
+RE_JS_TLS_CONNECT = re.compile(r"""\btls\.(?:connect|TLSSocket)\s*\(""")
+RE_JS_DNS = re.compile(
+    r"""\bdns\.(?:resolve|resolve4|resolve6|lookup|reverse|resolveMx|"""
+    r"""resolveTxt|resolveNs|resolveSrv|resolveCname|resolvePtr)\s*\("""
+)
+RE_JS_DGRAM = re.compile(r"""\bdgram\.createSocket\s*\(""")
+
+# JS/TS WebSocket
+RE_JS_WEBSOCKET = re.compile(r"""\b(?:new\s+WebSocket|new\s+ws|WebSocket)\s*\(""")
+
+# JS/TS gRPC
+RE_JS_GRPC = re.compile(
+    r"""\b(?:grpc\.(?:credentials|loadPackageDefinition)|"""
+    r"""new\s+grpc\.\w+|@grpc/grpc-js)\b"""
+)
+
+# Deno/Bun network APIs
+RE_JS_DENO_FETCH = re.compile(r"""\bDeno\.(?:fetch|connect|connectTls|listen)\s*\(""")
+RE_JS_BUN_FETCH = re.compile(r"""\bBun\.(?:fetch|connect)\s*\(""")
+
+# node-fetch import pattern
+RE_JS_NODE_FETCH = re.compile(r"""\bnode[-_]fetch\b""")
+
+# Dynamic URL indicators — imported from shared _utils
 
 # Environment / config sourced URLs
 RE_PY_ENV = re.compile(r"""\bos\.(?:environ|getenv)\s*[\[(]""")
 RE_PY_CONFIG = re.compile(r"""\b(?:config|settings|cfg|conf)\s*[\[.]""", re.IGNORECASE)
-RE_JS_PROCESS_ENV = re.compile(r"""\bprocess\.env\.""")
+RE_JS_PROCESS_ENV = re.compile(r"""\b(?:process\.env\.|Deno\.env\.get\s*\()""")
 RE_JS_CONFIG = re.compile(r"""\b(?:config|settings|cfg|conf)\s*[\[.]""", re.IGNORECASE)
 
 # User input indicators
@@ -89,9 +110,19 @@ PY_EXTENSIONS = {".py", ".pyw"}
 JS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"}
 
 
-def _ext(path: str) -> str:
-    dot = path.rfind(".")
-    return path[dot:].lower() if dot != -1 else ""
+from mcp_shield.detectors.code._utils import (  # noqa: E402
+    RE_CONCAT,
+    RE_FORMAT_CALL,
+    RE_FSTRING,
+    RE_TEMPLATE_LITERAL,
+    file_ext as _ext,
+    has_interpolation,
+)
+
+
+def _has_interpolation_or_dynamic(line: str) -> bool:
+    """Check if a line has any dynamic content indicators."""
+    return has_interpolation(line, include_percent=False)
 
 
 def _classify_url_source(line: str, is_python: bool) -> str | None:
@@ -233,7 +264,8 @@ class SsrfDetector:
         has_validation = _has_url_validation(content)
         lines = content.splitlines()
 
-        js_patterns = [
+        # HTTP-level patterns (URL-based SSRF)
+        js_http_patterns = [
             (RE_JS_FETCH, "fetch"),
             (RE_JS_AXIOS_METHOD, "axios"),
             (RE_JS_AXIOS, "axios"),
@@ -244,6 +276,18 @@ class SsrfDetector:
             (RE_JS_KY, "ky"),
             (RE_JS_SUPERAGENT, "superagent"),
             (RE_JS_REQUEST_LIB, "request"),
+            (RE_JS_DENO_FETCH, "Deno.fetch/connect"),
+            (RE_JS_BUN_FETCH, "Bun.fetch/connect"),
+        ]
+
+        # Low-level network patterns (socket-level SSRF)
+        js_net_patterns = [
+            (RE_JS_NET_CONNECT, "net.connect"),
+            (RE_JS_TLS_CONNECT, "tls.connect"),
+            (RE_JS_DGRAM, "dgram.createSocket"),
+            (RE_JS_DNS, "dns.resolve/lookup"),
+            (RE_JS_WEBSOCKET, "WebSocket"),
+            (RE_JS_GRPC, "gRPC"),
         ]
 
         for i, line in enumerate(lines, 1):
@@ -251,7 +295,10 @@ class SsrfDetector:
             if stripped.startswith("//") or stripped.startswith("*"):
                 continue
 
-            for pattern, lib_name in js_patterns:
+            matched = False
+
+            # Check HTTP patterns first
+            for pattern, lib_name in js_http_patterns:
                 if pattern.search(line):
                     url_source = _classify_url_source(line, is_python=False)
                     if url_source is not None:
@@ -260,7 +307,39 @@ class SsrfDetector:
                                 stripped, i, lib_name, url_source, has_validation
                             )
                         )
+                    matched = True
                     break  # One finding per line max
+
+            if matched:
+                continue
+
+            # Check low-level network patterns
+            for pattern, lib_name in js_net_patterns:
+                if pattern.search(line):
+                    url_source = _classify_url_source(line, is_python=False)
+                    if url_source is not None:
+                        findings.append(
+                            self._make_finding(
+                                stripped, i, lib_name, url_source, has_validation
+                            )
+                        )
+                    elif _has_interpolation_or_dynamic(line):
+                        # Low-level network with dynamic args is always suspicious
+                        findings.append(
+                            Finding(
+                                rule_id="ssrf_dynamic_url",
+                                severity=Severity.HIGH,
+                                surface=Surface.SOURCE_CODE,
+                                title=f"SSRF risk: {lib_name} with dynamic target",
+                                evidence=stripped[:200],
+                                location=f"line {i}",
+                                detail=(
+                                    f"{lib_name} with dynamic arguments can be "
+                                    "redirected to internal services or arbitrary hosts."
+                                ),
+                            )
+                        )
+                    break
 
         return findings
 

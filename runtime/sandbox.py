@@ -31,10 +31,55 @@ from mcp_shield.core.models import Finding, Severity, Surface
 # Configuration
 # ---------------------------------------------------------------------------
 
-SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent  # …/security/
-AUDIT_DIR = Path.home() / ".config" / "mcp-shield" / "audits"
+from mcp_shield.core.paths import get_audit_dir
+
+SCRIPT_DIR = Path(__file__).resolve().parent.parent  # .../mcp_shield/
+AUDIT_DIR = get_audit_dir()
 IMAGE_NAME = "mcp-shield-sandbox"
 DOCKERFILE_NAME = "Dockerfile.mcp-audit"
+ENTRYPOINT_NAME = "sandbox-entrypoint.sh"
+
+
+# ---------------------------------------------------------------------------
+# Docker availability check
+# ---------------------------------------------------------------------------
+
+
+def docker_available() -> bool:
+    """Check if Docker is installed and the daemon is running."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def check_sandbox_prerequisites() -> tuple[bool, str]:
+    """Check all prerequisites for sandbox mode.
+
+    Returns (ok, message) tuple.
+    """
+    if not docker_available():
+        return False, (
+            "Docker is not available. Install Docker and ensure the daemon "
+            "is running to use sandbox mode. Sandbox is optional -- "
+            "static analysis works without it."
+        )
+
+    # Check Dockerfile exists
+    dockerfile = SCRIPT_DIR / DOCKERFILE_NAME
+    if not dockerfile.exists():
+        return False, f"Dockerfile not found at {dockerfile}"
+
+    entrypoint = SCRIPT_DIR / ENTRYPOINT_NAME
+    if not entrypoint.exists():
+        return False, f"Entrypoint script not found at {entrypoint}"
+
+    return True, "All prerequisites met"
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +173,10 @@ class SandboxResult:
 
 def ensure_image_built(dockerfile_dir: Path | None = None) -> bool:
     """Ensure the sandbox Docker image exists; build it if needed."""
+    if not docker_available():
+        print("[!] Docker is not available")
+        return False
+
     result = subprocess.run(
         ["docker", "images", "-q", IMAGE_NAME],
         capture_output=True,
@@ -138,13 +187,18 @@ def ensure_image_built(dockerfile_dir: Path | None = None) -> bool:
     print(f"[*] Building Docker image {IMAGE_NAME}...")
     base = dockerfile_dir or SCRIPT_DIR
     dockerfile = base / DOCKERFILE_NAME
+    entrypoint = base / ENTRYPOINT_NAME
+
     if not dockerfile.exists():
         print(f"[!] Dockerfile not found: {dockerfile}")
+        return False
+    if not entrypoint.exists():
+        print(f"[!] Entrypoint not found: {entrypoint}")
         return False
 
     result = subprocess.run(
         ["docker", "build", "-t", IMAGE_NAME, "-f", str(dockerfile), str(base)],
-        timeout=300,
+        timeout=600,
     )
     return result.returncode == 0
 
@@ -160,6 +214,7 @@ def run_sandbox(
     mcp_type: str = "npm",
     duration: int = 60,
     audit_dir: Path | None = None,
+    network: str = "none",
 ) -> SandboxResult:
     """Launch an MCP in a Docker sandbox and collect runtime observations.
 
@@ -175,19 +230,34 @@ def run_sandbox(
         Observation window in seconds.
     audit_dir:
         Where to write reports. Defaults to ``~/.config/mcp-shield/audits``.
+    network:
+        Docker network mode. "none" (default) = fully isolated,
+        "bridge" = monitored network access. Use "none" for maximum
+        security; use "bridge" to observe what the MCP tries to connect to.
 
     Returns
     -------
     SandboxResult
         Structured result with all captured data.
     """
+    # Graceful Docker check
+    ok, msg = check_sandbox_prerequisites()
+    if not ok:
+        print(f"[!] Sandbox skipped: {msg}", file=sys.stderr)
+        return SandboxResult(status="skipped", verdict="SKIPPED")
+
     if not ensure_image_built():
         return SandboxResult(status="error", verdict="ERROR")
+
+    # Validate network mode
+    if network not in ("none", "bridge"):
+        network = "none"
 
     out_dir = audit_dir or AUDIT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[*] Starting sandbox: {name} ({mcp_type}, {duration}s)")
+    net_label = "isolated (no network)" if network == "none" else "bridge (monitored)"
+    print(f"[*] Starting sandbox: {name} ({mcp_type}, {duration}s, {net_label})")
     print(f"[*] Source: {source}")
 
     # Create separate temp directories for logs and captures
@@ -199,28 +269,56 @@ def run_sandbox(
         logs_dir = Path(tempfile.mkdtemp(prefix="mcp_sandbox_logs_"))
         capture_dir = Path(tempfile.mkdtemp(prefix="mcp_sandbox_capture_"))
 
-        result = subprocess.run(
+        # Build docker command
+        docker_cmd = [
+            "docker",
+            "run",
+            "--rm",
+            f"--network={network}",
+            "--cap-add=NET_RAW",  # tcpdump
+            "--cap-add=SYS_PTRACE",  # strace
+            "--security-opt=no-new-privileges",
+            "--memory=512m",
+            "--cpus=1",
+            "--pids-limit=100",
+            "-v",
+            f"{logs_dir}:/audit/logs",
+            "-v",
+            f"{capture_dir}:/audit/capture",
+        ]
+
+        # For local paths, mount the source as a volume and use "local" type
+        source_path = Path(source)
+        if source_path.is_dir():
+            # Resolve to absolute path for Docker volume mount
+            abs_source = str(source_path.resolve()).replace("\\", "/")
+            docker_cmd.extend(["-v", f"{abs_source}:/audit/source:ro"])
+            container_source = "/audit/source"
+            effective_type = "local"
+        else:
+            container_source = source
+            effective_type = mcp_type
+
+        docker_cmd.extend(
             [
-                "docker",
-                "run",
-                "--rm",
-                "--network=bridge",
-                "--cap-add=NET_RAW",  # tcpdump
-                "--cap-add=SYS_PTRACE",  # strace
-                "--memory=512m",
-                "--cpus=1",
-                "--pids-limit=100",
-                "-v",
-                f"{logs_dir}:/audit/logs",
-                "-v",
-                f"{capture_dir}:/audit/capture",
                 IMAGE_NAME,
-                source,
-                mcp_type,
+                container_source,
+                effective_type,
                 str(duration),
-            ],
+            ]
+        )
+
+        # MSYS_NO_PATHCONV prevents Git Bash (MSYS2) on Windows from
+        # converting Unix paths like /audit/source to C:/Program Files/...
+        import os
+
+        run_env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
+
+        result = subprocess.run(
+            docker_cmd,
             capture_output=True,
             timeout=duration + 120,
+            env=run_env,
         )
 
         stdout = result.stdout.decode("utf-8", errors="ignore")
@@ -231,15 +329,16 @@ def run_sandbox(
         sandbox_result.raw_stdout = stdout[-2000:]
         sandbox_result.raw_stderr = stderr[-1000:]
 
-        # Write reports
+        # Write reports — sanitize name for safe filenames
+        safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", name)[:100] or "unknown"
         ts = datetime.now().strftime("%Y%m%d_%H%M")
-        report_file = out_dir / f"sandbox_{name}_{ts}.md"
+        report_file = out_dir / f"sandbox_{safe_name}_{ts}.md"
         report_file.write_text(
             _generate_markdown_report(name, source, sandbox_result),
             encoding="utf-8",
         )
 
-        json_file = out_dir / f"sandbox_{name}_{ts}.json"
+        json_file = out_dir / f"sandbox_{safe_name}_{ts}.json"
         json_file.write_text(
             json.dumps(sandbox_result.to_dict(), indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -348,6 +447,13 @@ def _parse_sandbox_output(stdout: str) -> SandboxResult:
     else:
         result.verdict = "CLEAN"
 
+    # Check if the MCP actually started — "No entry point found" or
+    # "ENOENT" in stdout means the sandbox ran but tested nothing
+    raw = result.raw_stdout or ""
+    if "No entry point found" in raw or "ENOENT" in raw:
+        result.verdict = "INCOMPLETE"
+        result.status = "incomplete"
+
     return result
 
 
@@ -406,5 +512,5 @@ def _generate_markdown_report(
     lines.append("")
 
     lines.append("---")
-    lines.append("*Generated by MCP Shield v2 — GaboLabs*")
+    lines.append("*Generated by MCP Shield v3 — GaboLabs*")
     return "\n".join(lines)

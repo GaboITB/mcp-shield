@@ -1,4 +1,4 @@
-"""Detector protocols for MCP Shield v2.
+"""Detector protocols for MCP Shield v3.
 
 Three distinct protocols for three detection surfaces:
 - SourceDetector: scans source code files (line-by-line or AST)

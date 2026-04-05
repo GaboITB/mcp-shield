@@ -1,4 +1,4 @@
-"""URL extraction and classification for MCP Shield v2.
+"""URL extraction and classification for MCP Shield v3.
 
 Ports extract_urls(), _is_documentation_context(), and _is_in_docstring()
 from mcp_audit.py v1.  Loads a whitelist from known_safe_urls.json and

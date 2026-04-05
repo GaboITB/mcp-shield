@@ -212,6 +212,7 @@ class TestDescriptionHeuristic(_BaseMetaTest):
     def test_empty_description(self):
         f = self.det["description_heuristic"].scan_tool("mystery", "", {})
         self.assertTrue(len(f) > 0)
+        self.assertTrue(any(x.rule_id == "description_empty" for x in f))
 
     def test_oversized_description(self):
         desc = "A" * 600

@@ -1,0 +1,134 @@
+name: 'MCP Shield Security Audit'
+description: 'Scan MCP servers for security vulnerabilities before installation'
+author: 'GaboLabs'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  source:
+    description: 'Path to MCP server source code or GitHub URL'
+    required: true
+  name:
+    description: 'Name for the MCP server being audited'
+    required: true
+  format:
+    description: 'Output format (text, json, html)'
+    required: false
+    default: 'text'
+  fail-on:
+    description: 'Fail the action on this severity or higher (critical, high, medium, low)'
+    required: false
+    default: 'critical'
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.12'
+
+outputs:
+  grade:
+    description: 'Audit grade (A+, A, B, C, F)'
+    value: ${{ steps.audit.outputs.grade }}
+  score:
+    description: 'Total risk score'
+    value: ${{ steps.audit.outputs.score }}
+  findings:
+    description: 'Number of findings'
+    value: ${{ steps.audit.outputs.findings }}
+  critical:
+    description: 'Number of critical findings'
+    value: ${{ steps.audit.outputs.critical }}
+  report-path:
+    description: 'Path to the generated report file'
+    value: ${{ steps.audit.outputs.report_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install MCP Shield
+      shell: bash
+      run: pip install mcp-shield-audit
+
+    - name: Run audit
+      id: audit
+      shell: bash
+      env:
+        INPUT_SOURCE: ${{ inputs.source }}
+        INPUT_NAME: ${{ inputs.name }}
+        INPUT_FORMAT: ${{ inputs.format }}
+      run: |
+        # Run scan and capture JSON output
+        # Inputs passed via env to prevent script injection (C3 fix)
+        mcp-shield scan "${INPUT_SOURCE}" \
+          --name "${INPUT_NAME}" \
+          --format json \
+          --output audit_result.json || true
+
+        # Extract metrics from JSON
+        if [ -f audit_result.json ]; then
+          GRADE=$(python3 -c "import json; d=json.load(open('audit_result.json')); print(d.get('grade','?'))")
+          SCORE=$(python3 -c "import json; d=json.load(open('audit_result.json')); print(d.get('total_score',0))")
+          FINDINGS=$(python3 -c "import json; d=json.load(open('audit_result.json')); print(len(d.get('findings',[])))")
+          CRITICAL=$(python3 -c "import json; d=json.load(open('audit_result.json')); print(sum(1 for f in d.get('findings',[]) if f.get('severity')=='critical'))")
+        else
+          GRADE="?"
+          SCORE=0
+          FINDINGS=0
+          CRITICAL=0
+        fi
+
+        echo "grade=${GRADE}" >> $GITHUB_OUTPUT
+        echo "score=${SCORE}" >> $GITHUB_OUTPUT
+        echo "findings=${FINDINGS}" >> $GITHUB_OUTPUT
+        echo "critical=${CRITICAL}" >> $GITHUB_OUTPUT
+
+        # Generate report in requested format
+        if [ "${INPUT_FORMAT}" = "html" ]; then
+          mcp-shield scan "${INPUT_SOURCE}" --name "${INPUT_NAME}" --format html --output audit_report.html || true
+          echo "report_path=audit_report.html" >> $GITHUB_OUTPUT
+        elif [ "${INPUT_FORMAT}" = "json" ]; then
+          echo "report_path=audit_result.json" >> $GITHUB_OUTPUT
+        else
+          mcp-shield scan "${INPUT_SOURCE}" --name "${INPUT_NAME}" --format text --output audit_report.txt || true
+          echo "report_path=audit_report.txt" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Check severity threshold
+      shell: bash
+      env:
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        FAIL_ON="${INPUT_FAIL_ON}"
+        GRADE="${{ steps.audit.outputs.grade }}"
+        CRITICAL="${{ steps.audit.outputs.critical }}"
+        SCORE="${{ steps.audit.outputs.score }}"
+
+        echo "::notice::MCP Shield: Grade ${GRADE}, Score ${SCORE}, ${CRITICAL} critical findings"
+
+        # Determine if we should fail
+        SHOULD_FAIL=0
+        case "$FAIL_ON" in
+          critical)
+            [ "$CRITICAL" -gt 0 ] && SHOULD_FAIL=1
+            ;;
+          high)
+            [ "$SCORE" -gt 20 ] && SHOULD_FAIL=1
+            ;;
+          medium)
+            [ "$SCORE" -gt 0 ] && SHOULD_FAIL=1
+            ;;
+          low)
+            [ "$SCORE" -gt 0 ] && SHOULD_FAIL=1
+            ;;
+        esac
+
+        if [ "$SHOULD_FAIL" -eq 1 ]; then
+          echo "::error::MCP Shield audit failed: Grade ${GRADE}, ${CRITICAL} critical findings"
+          exit 1
+        fi

@@ -1,4 +1,4 @@
-"""Tool Shadowing Detector — MCP Shield v2.
+"""Tool Shadowing Detector — MCP Shield v3.
 
 Detects dynamically injected tools, hidden tools, and name collisions
 with known built-in tool names. Also flags near-matches that could be

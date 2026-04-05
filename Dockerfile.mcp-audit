@@ -1,0 +1,41 @@
+# MCP Shield Sandbox — Isolated MCP server analysis container
+# Captures network traffic, filesystem changes, and syscalls
+# during MCP server startup and operation.
+#
+# Usage (internal — called by mcp-shield sandbox):
+#   docker build -t mcp-shield-sandbox -f Dockerfile.mcp-audit .
+#   docker run --rm --network=none --cap-add=NET_RAW --cap-add=SYS_PTRACE \
+#     mcp-shield-sandbox <source> <type> <duration>
+
+FROM node:20-slim
+
+# Install analysis tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tcpdump \
+    strace \
+    inotify-tools \
+    python3 \
+    python3-pip \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for sandbox execution
+RUN groupadd -r sandbox && useradd -r -g sandbox -m sandbox
+
+# Create working directories with correct ownership
+RUN mkdir -p /audit/logs /audit/capture /audit/source /mcp \
+    && chown -R sandbox:sandbox /audit /mcp
+
+WORKDIR /mcp
+
+# Copy entrypoint
+COPY sandbox-entrypoint.sh /usr/local/bin/sandbox-entrypoint.sh
+RUN chmod +x /usr/local/bin/sandbox-entrypoint.sh
+
+# SYS_PTRACE and NET_RAW are added at runtime via --cap-add
+# The entrypoint needs strace/tcpdump which require these caps.
+# We run as non-root but with the necessary capabilities.
+USER sandbox
+
+ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint.sh"]

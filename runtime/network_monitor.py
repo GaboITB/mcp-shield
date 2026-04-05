@@ -32,7 +32,9 @@ from mcp_shield.core.models import Finding, Severity, Surface
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent  # …/security/
 SAFE_URLS_FILE = SCRIPT_DIR / "known_safe_urls.json"
 
-DEFAULT_LOG_DIR = Path.home() / ".config" / "mcp-shield" / "logs"
+from mcp_shield.core.paths import get_log_dir
+
+DEFAULT_LOG_DIR = get_log_dir()
 DEFAULT_LOG_FILE = DEFAULT_LOG_DIR / "mcp_network.jsonl"
 
 DEFAULT_KNOWN_PORTS: set[int] = {
@@ -71,11 +73,25 @@ def load_safe_domains(path: Path | None = None) -> set[str]:
 
 
 def get_network_connections() -> list[dict[str, Any]]:
-    """Parse active TCP connections from ``netstat -nob`` (Windows).
+    """Parse active TCP connections from OS-specific tools.
+
+    - Windows: ``netstat -nob``
+    - Linux: ``ss -tunapo``
+    - macOS: ``lsof -i -P -n``
 
     Returns a list of dicts with keys:
         local_addr, local_port, remote_addr, remote_port, state, process
     """
+    if sys.platform == "win32":
+        return _parse_netstat_windows()
+    elif sys.platform == "darwin":
+        return _parse_lsof_macos()
+    else:
+        return _parse_ss_linux()
+
+
+def _parse_netstat_windows() -> list[dict[str, Any]]:
+    """Parse ``netstat -nob`` on Windows."""
     connections: list[dict[str, Any]] = []
     try:
         result = subprocess.run(
@@ -108,7 +124,90 @@ def get_network_connections() -> list[dict[str, Any]]:
                 )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         print(f"[!] netstat error: {exc}", file=sys.stderr)
+    return connections
 
+
+def _parse_ss_linux() -> list[dict[str, Any]]:
+    """Parse ``ss -tunapo`` on Linux."""
+    connections: list[dict[str, Any]] = []
+    try:
+        result = subprocess.run(
+            ["ss", "-tunapo"],
+            capture_output=True,
+            timeout=15,
+        )
+        output = result.stdout.decode("utf-8", errors="ignore")
+
+        for line in output.splitlines()[1:]:  # skip header
+            parts = line.split()
+            if len(parts) < 5 or parts[0] not in ("tcp", "udp"):
+                continue
+            state = parts[1]
+            local = parts[3]
+            remote = parts[4]
+            process = ""
+            if len(parts) >= 6:
+                pm = re.search(
+                    r'users:\(\("([^"]+)"', parts[5] if len(parts) > 5 else ""
+                )
+                process = pm.group(1) if pm else ""
+
+            lm = re.match(r"(.+):(\d+)$", local)
+            rm = re.match(r"(.+):(\d+)$", remote)
+            if lm and rm:
+                connections.append(
+                    {
+                        "local_addr": lm.group(1),
+                        "local_port": int(lm.group(2)),
+                        "remote_addr": rm.group(1),
+                        "remote_port": int(rm.group(2)),
+                        "state": state,
+                        "process": process,
+                    }
+                )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        print(f"[!] ss error: {exc}", file=sys.stderr)
+    return connections
+
+
+def _parse_lsof_macos() -> list[dict[str, Any]]:
+    """Parse ``lsof -i -P -n`` on macOS."""
+    connections: list[dict[str, Any]] = []
+    try:
+        result = subprocess.run(
+            ["lsof", "-i", "-P", "-n"],
+            capture_output=True,
+            timeout=15,
+        )
+        output = result.stdout.decode("utf-8", errors="ignore")
+
+        for line in output.splitlines()[1:]:  # skip header
+            parts = line.split()
+            if len(parts) < 9:
+                continue
+            process = parts[0]
+            name_col = parts[8] if len(parts) > 8 else ""
+
+            # Format: host:port->host:port
+            arrow = name_col.split("->")
+            if len(arrow) == 2:
+                lm = re.match(r"(.+):(\d+)$", arrow[0])
+                rm = re.match(r"(.+):(\d+)$", arrow[1])
+                if lm and rm:
+                    state = parts[9] if len(parts) > 9 else ""
+                    state = state.strip("()")
+                    connections.append(
+                        {
+                            "local_addr": lm.group(1),
+                            "local_port": int(lm.group(2)),
+                            "remote_addr": rm.group(1),
+                            "remote_port": int(rm.group(2)),
+                            "state": state,
+                            "process": process,
+                        }
+                    )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        print(f"[!] lsof error: {exc}", file=sys.stderr)
     return connections
 
 

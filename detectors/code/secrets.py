@@ -1,4 +1,4 @@
-"""Hardcoded secrets detector for MCP Shield v2.
+"""Hardcoded secrets detector for MCP Shield v3.
 
 Detects credentials and sensitive values embedded in source code:
 - Hardcoded passwords, API keys, tokens, secret keys
@@ -54,6 +54,33 @@ RE_JWT = re.compile(
     r"""eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-+/=]+"""
 )
 RE_PRIVATE_KEY_PEM = re.compile(r"""-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----""")
+
+# Service-specific token patterns
+RE_STRIPE_KEY = re.compile(r"""(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{20,}""")
+RE_SLACK_TOKEN = re.compile(r"""xox[bpsar]-[A-Za-z0-9\-]{10,}""")
+RE_DISCORD_TOKEN = re.compile(
+    r"""[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}"""
+)
+RE_OPENAI_KEY = re.compile(r"""sk-[A-Za-z0-9]{20,}""")
+RE_TWILIO_SID = re.compile(r"""(?:AC|SK)[a-f0-9]{32}""")
+RE_SENDGRID_KEY = re.compile(r"""SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}""")
+RE_NPM_TOKEN = re.compile(r"""npm_[A-Za-z0-9]{36}""")
+RE_PYPI_TOKEN = re.compile(r"""pypi-[A-Za-z0-9]{50,}""")
+RE_GITLAB_TOKEN = re.compile(r"""glpat-[A-Za-z0-9_\-]{20,}""")
+RE_HEROKU_KEY = re.compile(
+    r"""[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"""
+)
+RE_GCP_SERVICE_ACCOUNT = re.compile(
+    r""""type"\s*:\s*"service_account"[\s\S]{0,2000}"private_key"[\s\S]{0,500}-----BEGIN""",
+)
+RE_AZURE_KEY = re.compile(r"""[A-Za-z0-9+/]{86}==""")
+RE_SHOPIFY_KEY = re.compile(r"""shpat_[a-fA-F0-9]{32}""")
+RE_TELEGRAM_BOT = re.compile(r"""\b\d{8,10}:[A-Za-z0-9_-]{35}\b""")
+RE_MAILGUN_KEY = re.compile(r"""key-[a-zA-Z0-9]{32}""")
+RE_ALGOLIA_KEY = re.compile(r"""[a-f0-9]{32}""")  # too generic alone, used with context
+
+# Deno env patterns
+RE_DENO_ENV = re.compile(r"""\bDeno\.env\.(?:get|toObject)\s*\(""")
 
 # Connection strings with passwords
 RE_CONN_STRING = re.compile(
@@ -148,9 +175,7 @@ SCANNABLE_EXTENSIONS = {
 }
 
 
-def _ext(path: str) -> str:
-    dot = path.rfind(".")
-    return path[dot:].lower() if dot != -1 else ""
+from mcp_shield.detectors.code._utils import file_ext as _ext  # noqa: E402
 
 
 def _is_placeholder(value: str) -> bool:
@@ -264,6 +289,18 @@ class SecretsDetector:
             (RE_GITHUB_TOKEN, "GitHub token", Severity.CRITICAL),
             (RE_JWT, "JSON Web Token (JWT)", Severity.HIGH),
             (RE_PRIVATE_KEY_PEM, "Private key (PEM)", Severity.CRITICAL),
+            (RE_STRIPE_KEY, "Stripe API key", Severity.CRITICAL),
+            (RE_SLACK_TOKEN, "Slack token", Severity.CRITICAL),
+            (RE_DISCORD_TOKEN, "Discord bot token", Severity.HIGH),
+            (RE_OPENAI_KEY, "OpenAI API key", Severity.CRITICAL),
+            (RE_TWILIO_SID, "Twilio SID/key", Severity.HIGH),
+            (RE_SENDGRID_KEY, "SendGrid API key", Severity.CRITICAL),
+            (RE_NPM_TOKEN, "npm access token", Severity.CRITICAL),
+            (RE_PYPI_TOKEN, "PyPI API token", Severity.CRITICAL),
+            (RE_GITLAB_TOKEN, "GitLab personal access token", Severity.CRITICAL),
+            (RE_SHOPIFY_KEY, "Shopify access token", Severity.HIGH),
+            (RE_TELEGRAM_BOT, "Telegram bot token", Severity.HIGH),
+            (RE_MAILGUN_KEY, "Mailgun API key", Severity.HIGH),
         ]
 
         for i, line in enumerate(lines, 1):

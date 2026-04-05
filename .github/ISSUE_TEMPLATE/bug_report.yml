@@ -1,0 +1,45 @@
+name: Bug Report
+description: Report a bug in MCP Shield
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Full command and output
+      placeholder: |
+        ```
+        mcp-shield scan <source> --name <name>
+        ```
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: MCP Shield Version
+      placeholder: "3.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python Version
+      placeholder: "3.12"

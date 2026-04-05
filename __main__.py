@@ -1,4 +1,4 @@
-"""Entry point for `py -3 -m mcp_shield`."""
+"""Entry point for `python3 -m mcp_shield`."""
 
 from mcp_shield.cli import main
 

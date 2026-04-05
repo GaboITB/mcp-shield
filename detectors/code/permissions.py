@@ -1,4 +1,4 @@
-"""Excessive permissions and obfuscation detector for MCP Shield v2.
+"""Excessive permissions and obfuscation detector for MCP Shield v3.
 
 Detects three categories of risk:
 1. Excessive permissions: filesystem + network + process spawning in same file
@@ -28,8 +28,11 @@ RE_FS_PYTHON = re.compile(
     r"""with\s+open|file\.read|file\.write)\b"""
 )
 RE_FS_JS = re.compile(
-    r"""\b(?:fs\w*\.(read|write|unlink|mkdir|rmdir|access|stat|chmod|rename|copyFile)|"""
-    r"""fs\.promises\.\w+|createReadStream|createWriteStream)\b"""
+    r"""\b(?:fs\w*\.(?:read|write|unlink|mkdir|rmdir|access|stat|chmod|rename|copyFile|"""
+    r"""open|symlink|link|lstat|chown|truncate|appendFile|createReadStream|createWriteStream)\w*|"""
+    r"""fs\.promises\.\w+|createReadStream|createWriteStream|"""
+    r"""Deno\.(?:readFile|writeFile|open|create|mkdir|remove|rename|stat|readDir|copyFile)\w*|"""
+    r"""Bun\.(?:file|write)\w*)"""
 )
 
 # Network access indicators
@@ -39,9 +42,13 @@ RE_NET_PYTHON = re.compile(
     r"""websocket|socketio)\b"""
 )
 RE_NET_JS = re.compile(
-    r"""\b(?:fetch\s*\(|axios\.\w+|http\.(?:get|request)|https\.(?:get|request)|"""
-    r"""got\.\w+|undici\.\w+|net\.connect|dgram\.\w+|"""
-    r"""WebSocket|socket\.io|XMLHttpRequest|superagent)\b"""
+    r"""\b(?:fetch\s*\(|axios\.\w+|http\.(?:get|request)\w*|https\.(?:get|request)\w*|"""
+    r"""got\.\w+|undici\.\w+|net\.(?:connect|createConnection|createServer|Socket)\w*|"""
+    r"""tls\.(?:connect|TLSSocket|createServer)\w*|"""
+    r"""dgram\.(?:createSocket|Socket)\w*|dns\.(?:resolve|lookup)\w*|"""
+    r"""WebSocket|socket\.io|XMLHttpRequest|superagent|"""
+    r"""Deno\.(?:fetch|connect|connectTls|listen)\w*|"""
+    r"""Bun\.(?:fetch|connect|serve)\w*)"""
 )
 
 # Process spawning indicators
@@ -52,8 +59,10 @@ RE_PROC_PYTHON = re.compile(
 )
 RE_PROC_JS = re.compile(
     r"""\b(?:child_process\.\w+|spawn\s*\(|fork\s*\(|"""
-    r"""Worker\s*\(|cluster\.fork|process\.kill|"""
-    r"""execFile\s*\(|execFileSync\s*\()\b"""
+    r"""new\s+Worker\s*\(|Worker\s*\(|worker_threads|"""
+    r"""cluster\.fork|process\.kill|process\.binding|"""
+    r"""execFile\s*\(|execFileSync\s*\(|"""
+    r"""Deno\.(?:run|Command)|Bun\.(?:spawn|spawnSync))\b"""
 )
 
 # ---------------------------------------------------------------------------
@@ -79,6 +88,19 @@ RE_OBFUSCATOR_SIGNATURE = re.compile(r"""\b(?:_0x[a-f0-9]{4,}|_0X[A-F0-9]{4,})\b
 # Packer pattern: function(p,a,c,k,e,...) used to pack/hide code
 RE_PACKED_FUNC = re.compile(r"""\bfunction\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e""")
 RE_JSF_PATTERN = re.compile(r"""\[\]\[['"][^'"]+['"]\]\[['"][^'"]+['"]\]\s*\(""")
+
+# Advanced obfuscation: computed property access to hide require/eval
+RE_BRACKET_REQUIRE = re.compile(
+    r"""\bglobal\s*\[\s*['"]require['"]\s*\]|"""
+    r"""process\s*\[\s*['"](?:mainModule|binding)['"]\s*\]|"""
+    r"""\w+\s*\[\s*['"](?:constructor|__proto__|prototype)['"]\s*\]"""
+)
+# Obfuscated require: module["\x72equire"] or similar
+RE_OBFUSCATED_REQUIRE = re.compile(r"""\[\s*['"]\\x[0-9a-fA-F]{2}[^'"]*['"]\s*\]""")
+# Prototype pollution patterns
+RE_PROTO_POLLUTION = re.compile(
+    r"""__proto__|Object\.(?:setPrototypeOf|assign\s*\([^,]+,\s*(?:req|body|params|query))"""
+)
 
 # Minimum thresholds for hex/unicode density
 HEX_ESCAPE_THRESHOLD = 8  # per line
@@ -110,9 +132,7 @@ JS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"}
 ALL_CODE_EXTENSIONS = PY_EXTENSIONS | JS_EXTENSIONS | {".go"}
 
 
-def _ext(path: str) -> str:
-    dot = path.rfind(".")
-    return path[dot:].lower() if dot != -1 else ""
+from mcp_shield.detectors.code._utils import file_ext as _ext  # noqa: E402
 
 
 def _basename(path: str) -> str:
@@ -381,6 +401,58 @@ class PermissionsDetector:
                         title="JSFuck-style obfuscation pattern detected",
                         evidence=stripped[:200],
                         location=f"line {i}",
+                    )
+                )
+
+            # Computed property access to hide require/eval
+            if RE_BRACKET_REQUIRE.search(line):
+                findings.append(
+                    Finding(
+                        rule_id="obfuscated_code",
+                        severity=Severity.HIGH,
+                        surface=Surface.SOURCE_CODE,
+                        title="Computed property access hiding dangerous call",
+                        evidence=stripped[:200],
+                        location=f"line {i}",
+                        detail=(
+                            "Bracket notation to access require/constructor/binding "
+                            "is a common obfuscation technique to bypass static analysis."
+                        ),
+                    )
+                )
+
+            # Obfuscated require with hex escapes in bracket notation
+            if RE_OBFUSCATED_REQUIRE.search(line):
+                if not any(f.location == f"line {i}" for f in findings):
+                    findings.append(
+                        Finding(
+                            rule_id="obfuscated_code",
+                            severity=Severity.HIGH,
+                            surface=Surface.SOURCE_CODE,
+                            title="Hex-escaped string in bracket accessor",
+                            evidence=stripped[:200],
+                            location=f"line {i}",
+                            detail=(
+                                "Hex-escaped strings in bracket accessors hide the "
+                                "actual property being accessed from static analysis."
+                            ),
+                        )
+                    )
+
+            # Prototype pollution
+            if RE_PROTO_POLLUTION.search(line):
+                findings.append(
+                    Finding(
+                        rule_id="obfuscated_code",
+                        severity=Severity.HIGH,
+                        surface=Surface.SOURCE_CODE,
+                        title="Prototype pollution pattern detected",
+                        evidence=stripped[:200],
+                        location=f"line {i}",
+                        detail=(
+                            "__proto__ or Object.setPrototypeOf with user input "
+                            "enables prototype pollution attacks."
+                        ),
                     )
                 )
 

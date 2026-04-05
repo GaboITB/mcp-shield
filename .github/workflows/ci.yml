@@ -2,29 +2,64 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [master, main]
   pull_request:
-    branches: [main, master]
+    branches: [master, main]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: mcp_shield
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Run tests
-        working-directory: mcp_shield
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run unit tests (327+)
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Validate DVMCP (11/11)
+        run: python damn-vulnerable-mcp/validate.py
+
+      - name: CLI smoke test
         run: |
-          cd ..
-          python -m unittest discover -s mcp_shield/tests -p "test_*.py" -v
+          mcp-shield --version
+          mcp-shield --help
+          mcp-shield detect || true
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check syntax
+        run: |
+          python -m py_compile cli.py
+          python -m py_compile core/engine.py
+          python -m py_compile core/models.py
+
+      - name: Verify zero dependencies
+        run: |
+          pip install -e .
+          deps=$(pip list --format=freeze | grep -cv -E "^(mcp-shield-audit|pip|setuptools|wheel)==")
+          if [ "$deps" -gt 0 ]; then
+            echo "FAIL: unexpected dependencies found"
+            pip list --format=freeze
+            exit 1
+          fi
+          echo "OK: zero runtime dependencies"

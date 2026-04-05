@@ -1,4 +1,4 @@
-"""Dependency analysis for MCP Shield v2.
+"""Dependency analysis for MCP Shield v3.
 
 Ports analyze_dependencies() and find_phantom_deps() from mcp_audit.py v1.
 Parses npm (package.json), pip (requirements.txt, pyproject.toml), and Go (go.mod).
@@ -440,18 +440,29 @@ def find_phantom_deps(
         "pip": "requirements.txt",
     }.get(deps_result.type or "", "manifest")
 
+    # Reduce severity for bundled packages (dist/build/lib dirs exist)
+    # because imports are likely minified/concatenated and not searchable
+    is_bundled = any((repo_path / d).is_dir() for d in ("dist", "build", "lib", "out"))
+
     for dep_name in dep_search_map:
         if dep_name not in found_deps:
             phantoms.append(dep_name)
             findings.append(
                 Finding(
                     rule_id="phantom_dependency",
-                    severity=Severity.MEDIUM,
+                    severity=Severity.LOW if is_bundled else Severity.MEDIUM,
                     surface=Surface.SOURCE_CODE,
                     title=f"Phantom dependency: {dep_name}",
                     evidence=dep_name,
                     location=f"{manifest_file}:0",
-                    detail="Declared in dependencies but never imported in code",
+                    detail=(
+                        "Declared in dependencies but never imported in code"
+                        + (
+                            " (bundled package — may be a false positive)"
+                            if is_bundled
+                            else ""
+                        )
+                    ),
                 )
             )
 

@@ -1,4 +1,4 @@
-"""Runtime analysis modules for MCP Shield v2.
+"""Runtime analysis modules for MCP Shield v3.
 
 Submodules:
     network_monitor — live network connection monitoring

@@ -1,4 +1,4 @@
-"""npm-specific checks for MCP Shield v2.
+"""npm-specific checks for MCP Shield v3.
 
 Ports check_npm_deprecated(), check_mcp_sdk_version(), and
 check_rate_limiting() from mcp_audit.py v1.
@@ -108,9 +108,9 @@ _QUERY_KEYWORDS: tuple[str, ...] = (
 
 
 def npm_cmd(args: list[str]) -> list[str]:
-    """Build an npm command list — uses ``cmd /c npm`` on Windows."""
+    """Build an npm command list — uses ``npm.cmd`` on Windows."""
     if IS_WINDOWS:
-        return ["cmd", "/c", "npm"] + args
+        return ["npm.cmd"] + args
     return ["npm"] + args
 
 

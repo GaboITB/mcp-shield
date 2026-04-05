@@ -82,6 +82,8 @@ def audit_transitive_deps(
     repo_path: Path,
     dep_type: str,
     tmp_dir: Path,
+    *,
+    quiet: bool = False,
 ) -> str | None:
     """Install deps in isolation and audit the full transitive tree.
 
@@ -101,10 +103,10 @@ def audit_transitive_deps(
         A human-readable summary string, or ``None`` if not applicable.
     """
     if dep_type == "npm" and (repo_path / "package.json").exists():
-        return _audit_transitive_npm(repo_path, tmp_dir)
+        return _audit_transitive_npm(repo_path, tmp_dir, quiet=quiet)
 
     if dep_type == "pip":
-        return _audit_transitive_pip(repo_path)
+        return _audit_transitive_pip(repo_path, quiet=quiet)
 
     return None
 
@@ -112,6 +114,8 @@ def audit_transitive_deps(
 def run_dep_audit(
     repo_path: Path,
     dep_type: str,
+    *,
+    quiet: bool = False,
 ) -> str | None:
     """Run a direct dependency audit (npm audit or pip-audit).
 
@@ -126,7 +130,8 @@ def run_dep_audit(
         A human-readable summary string, or ``None`` if not applicable.
     """
     if dep_type == "npm" and (repo_path / "package.json").exists():
-        print("[*] npm audit...")
+        if not quiet:
+            print("[*] npm audit...", file=sys.stderr)
         try:
             r = subprocess.run(
                 npm_cmd(["audit", "--json"]),
@@ -149,7 +154,8 @@ def run_dep_audit(
     if dep_type == "pip":
         req = repo_path / "requirements.txt"
         if req.exists():
-            print("[*] pip-audit...")
+            if not quiet:
+                print("[*] pip-audit...", file=sys.stderr)
             try:
                 r = subprocess.run(
                     [sys.executable, "-m", "pip_audit", "-r", str(req)],
@@ -168,9 +174,15 @@ def run_dep_audit(
 # ---------------------------------------------------------------------------
 
 
-def _audit_transitive_npm(repo_path: Path, tmp_dir: Path) -> str:
+def _audit_transitive_npm(
+    repo_path: Path, tmp_dir: Path, *, quiet: bool = False
+) -> str:
     """Isolated npm transitive audit."""
-    print("[*] Transitive dep audit (npm install --ignore-scripts + npm audit)...")
+    if not quiet:
+        print(
+            "[*] Transitive dep audit (npm install --ignore-scripts + npm audit)...",
+            file=sys.stderr,
+        )
     audit_dir = tmp_dir / "transitive_audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
 
@@ -248,9 +260,10 @@ def _audit_transitive_npm(repo_path: Path, tmp_dir: Path) -> str:
         return f"Transitive audit error: {exc}"
 
 
-def _audit_transitive_pip(repo_path: Path) -> str | None:
+def _audit_transitive_pip(repo_path: Path, *, quiet: bool = False) -> str | None:
     """pip-audit on requirements.txt."""
-    print("[*] Transitive dep audit (pip)...")
+    if not quiet:
+        print("[*] Transitive dep audit (pip)...", file=sys.stderr)
     req = repo_path / "requirements.txt"
     if not req.exists():
         return None

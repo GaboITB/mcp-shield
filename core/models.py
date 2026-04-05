@@ -1,4 +1,4 @@
-"""Core data models for MCP Shield v2.
+"""Core data models for MCP Shield v3.
 
 All audit results flow through these types. Detectors produce Findings,
 fetchers produce ToolInfo/ResourceInfo/PromptInfo, and the engine
@@ -48,6 +48,7 @@ class Grade(Enum):
     A = "A"
     B = "B"
     C = "C"
+    D = "D"
     F = "F"
 
 
@@ -85,6 +86,7 @@ SEVERITY_WEIGHTS: dict[str, int] = {
     "homoglyph_spoofing": 40,
     "schema_injection": 30,
     "markdown_injection": 20,
+    "description_empty": 10,
     "description_oversized": 10,
     "description_imperative": 15,
     # Delta detectors
@@ -93,6 +95,39 @@ SEVERITY_WEIGHTS: dict[str, int] = {
     "capability_drift": 50,
     "tool_appeared_live": 40,
     "tool_disappeared_live": 20,
+    # Binary analysis detectors (lower weights — binary analysis is heuristic)
+    "binary_detected": 0,
+    "binary_url": 3,
+    "binary_shell_cmd": 5,
+    "binary_secret": 10,
+    "binary_c2_indicator": 50,
+    "binary_embedded_payload": 10,
+    "binary_high_entropy": 5,
+    "binary_encrypted_section": 3,
+    "binary_capability": 2,
+    "binary_excessive_caps": 8,
+    "binary_oversized": 1,
+    # Bait-and-switch detectors
+    "bait_switch": 100,
+    "bait_switch_tool_hidden": 80,
+    "bait_switch_desc_changed": 40,
+    "bait_switch_schema_changed": 40,
+    # Sandbox runtime detectors
+    "sandbox_sensitive_file": 50,
+    "sandbox_external_connection": 40,
+    "sandbox_dns_query": 15,
+    "sandbox_suspicious_process": 30,
+    # Resource detectors
+    "resource_dangerous_uri": 30,
+    "resource_internal_uri": 15,
+    "resource_broad_uri": 15,
+    "resource_executable_mime": 10,
+    # Prompt template detectors
+    "prompt_template_suspicious": 5,
+    # Sampling detector
+    "sampling_declared": 40,
+    # Annotation coherence
+    "annotation_incoherent": 20,
     # Repo health
     "no_tests": 3,
     "no_license": 5,
@@ -244,6 +279,7 @@ class AuditResult:
     rate_limited_tools: list[str] = field(default_factory=list)
     aivss: Any = None  # AIVSSResult, set by engine after scoring
     timestamp: str = ""
+    trusted_publisher: str = ""  # Org/scope name if from a trusted publisher
 
     @property
     def total_score(self) -> int:
@@ -251,16 +287,9 @@ class AuditResult:
 
     @property
     def grade(self) -> Grade:
-        s = self.total_score
-        if s == 0:
-            return Grade.A_PLUS
-        if s <= 20:
-            return Grade.A
-        if s <= 60:
-            return Grade.B
-        if s <= 150:
-            return Grade.C
-        return Grade.F
+        from mcp_shield.scoring.verdict import compute_grade
+
+        return compute_grade(self.total_score)
 
     @property
     def critical_count(self) -> int:

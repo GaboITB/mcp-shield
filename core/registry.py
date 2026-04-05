@@ -57,6 +57,7 @@ def create_default_registry() -> DetectorRegistry:
     from mcp_shield.detectors.code.shell_injection import ShellInjectionDetector
     from mcp_shield.detectors.code.ssrf import SsrfDetector
     from mcp_shield.detectors.code.permissions import PermissionsDetector
+    from mcp_shield.detectors.code.binary_analysis import BinaryAnalysisDetector
     from mcp_shield.detectors.meta.prompt_injection import PromptInjectionDetector
     from mcp_shield.detectors.meta.unicode_tricks import (
         UnicodeInvisibleDetector,
@@ -70,6 +71,12 @@ def create_default_registry() -> DetectorRegistry:
     from mcp_shield.detectors.delta.tool_shadowing import ToolShadowingDetector
     from mcp_shield.detectors.delta.param_divergence import ParamDivergenceDetector
     from mcp_shield.detectors.delta.capability_drift import CapabilityDriftDetector
+    from mcp_shield.detectors.meta.annotation_coherence import (
+        AnnotationCoherenceDetector,
+    )
+    from mcp_shield.detectors.meta.resource_injection import ResourceInjectionDetector
+    from mcp_shield.detectors.meta.prompt_template import PromptTemplateDetector
+    from mcp_shield.detectors.meta.sampling_detector import SamplingDetector
 
     reg = DetectorRegistry()
 
@@ -80,6 +87,7 @@ def create_default_registry() -> DetectorRegistry:
     reg.register(SecretsDetector())
     reg.register(PathTraversalDetector())
     reg.register(PermissionsDetector())
+    reg.register(BinaryAnalysisDetector())
 
     # Meta detectors
     reg.register(PromptInjectionDetector())
@@ -88,10 +96,14 @@ def create_default_registry() -> DetectorRegistry:
     reg.register(SchemaInjectionDetector())
     reg.register(MarkdownInjectionDetector())
     reg.register(DescriptionHeuristicDetector())
+    reg.register(AnnotationCoherenceDetector())
 
     # Runtime detectors
     reg.register(ToolShadowingDetector())
     reg.register(ParamDivergenceDetector())
     reg.register(CapabilityDriftDetector())
+
+    # Protocol surface detectors (not in standard registry — called by engine directly)
+    # ResourceInjectionDetector, PromptTemplateDetector, SamplingDetector
 
     return reg

@@ -1,4 +1,4 @@
-"""Capability Drift Detector — MCP Shield v2.
+"""Capability Drift Detector — MCP Shield v3.
 
 Compares two snapshots of live tools (e.g., from different times or
 different clientInfo) to detect behavioral changes: new/removed tools,
@@ -175,6 +175,9 @@ class CapabilityDriftDetector:
     ) -> None:
         """Flag significant description changes (> 20% different)."""
         if base.description == curr.description:
+            return
+        # Skip if baseline is empty — static extractor likely missed it
+        if not base.description.strip():
             return
 
         ratio = _char_diff_ratio(base.description, curr.description)

@@ -1,0 +1,16 @@
+include LICENSE
+include README.md
+include CHANGELOG.md
+include SECURITY.md
+include CONTRIBUTING.md
+include pyproject.toml
+include action.yml
+include Dockerfile.mcp-audit
+include sandbox-entrypoint.sh
+
+recursive-include mcp_shield *.py
+recursive-include damn-vulnerable-mcp *.py *.json *.md
+
+exclude .gitignore
+prune mcp_shield/tests
+prune mcp_shield/__pycache__

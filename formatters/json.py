@@ -1,4 +1,4 @@
-"""JSON formatters for MCP Shield v2.
+"""JSON formatters for MCP Shield v3.
 
 Serializes AuditResult to JSON, handling Enum and dataclass types.
 """
@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from mcp_shield import __version__
 from mcp_shield.core.models import AuditResult
 
 
@@ -28,6 +30,12 @@ def _serialize(obj: Any) -> Any:
 def _result_to_dict(result: AuditResult) -> dict[str, Any]:
     """Convert AuditResult to a plain dict with computed properties."""
     data = dataclasses.asdict(result)
+    # Add metadata
+    data["$schema"] = (
+        "https://github.com/GaboITB/mcp-shield/blob/master/schemas/audit-output.schema.json"
+    )
+    data["mcp_shield_version"] = __version__
+    data["generated_at"] = datetime.now(timezone.utc).isoformat()
     # Add computed properties
     data["total_score"] = result.total_score
     data["grade"] = result.grade.value

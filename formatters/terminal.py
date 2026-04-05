@@ -1,4 +1,4 @@
-"""Terminal formatters for MCP Shield v2.
+"""Terminal formatters for MCP Shield v3.
 
 Produces colored/boxed output for CLI display and Markdown reports.
 """
@@ -74,12 +74,19 @@ def format_summary(result: AuditResult) -> str:
     )
     line4 = f"-> {top_finding}" if top_finding else "-> No findings"
 
+    # Trusted publisher line
+    line_trust = ""
+    if result.trusted_publisher:
+        line_trust = f"Verified publisher: {result.trusted_publisher}"
+
     # AIVSS line if available
     line5 = ""
     if result.aivss and hasattr(result.aivss, "score"):
         line5 = f"AIVSS: {result.aivss.score}/10 ({result.aivss.severity})"
 
-    inner_w = max(len(line1), len(line2), len(line3), len(line4), len(line5), w)
+    inner_w = max(
+        len(line1), len(line2), len(line3), len(line4), len(line_trust), len(line5), w
+    )
 
     top = f"+== MCP Shield {'=' * (inner_w - 11)}+"
     bot = f"+{'=' * (inner_w + 2)}+"
@@ -94,6 +101,8 @@ def format_summary(result: AuditResult) -> str:
         row(line3),
         row(line4),
     ]
+    if line_trust:
+        lines.append(row(line_trust))
     if line5:
         lines.append(row(line5))
     lines.append(bot)
@@ -104,6 +113,8 @@ def format_findings(result: AuditResult) -> str:
     """Detailed findings grouped by severity."""
     if not result.findings:
         return "No findings."
+
+    from mcp_shield.core.remediation import REMEDIATION_MAP
 
     sections: list[str] = []
     by_sev = result.findings_by_severity()
@@ -129,11 +140,93 @@ def format_findings(result: AuditResult) -> str:
             sections.append(f"  {color}{icon}{_RESET} {f.title}")
             sections.append(f"      Rule: {f.rule_id}  |  Location: {f.location}")
             sections.append(f"      Evidence: {f.evidence[:120]}")
-            if f.detail:
-                sections.append(f"      Detail: {f.detail[:200]}")
+            fix = REMEDIATION_MAP.get(f.rule_id)
+            if fix:
+                sections.append(f"      {_DIM}Fix: {fix[:150]}{_RESET}")
             sections.append("")
 
     return "\n".join(sections)
+
+
+def format_verdict(result: AuditResult) -> str:
+    """Human-readable verdict with next steps."""
+    grade = result.grade.value
+    score = result.total_score
+    name = result.name
+    trusted = result.trusted_publisher
+
+    lines: list[str] = []
+    lines.append("")
+
+    # Trusted publisher badge
+    if trusted:
+        lines.append(f"  \033[94m{_BOLD}Verified publisher: {trusted}{_RESET}")
+
+    # For trusted publishers, upgrade the verdict one level
+    # (C→CAUTION, D→WARNING) since many findings are expected FP
+    effective_grade = grade
+    if trusted and grade == "C":
+        effective_grade = "B_trusted"
+    elif trusted and grade == "D":
+        effective_grade = "C_trusted"
+
+    if effective_grade in ("A+", "A"):
+        lines.append(
+            f"\033[92m{_BOLD}VERDICT: SAFE{_RESET} (Grade {grade}, Score {score})"
+        )
+        lines.append(f"  You can install this MCP server.")
+        lines.append(f"  \033[92mclaude mcp add {name} -- <command>{_RESET}")
+    elif effective_grade in ("B", "B_trusted"):
+        label = "CAUTION" if not trusted else "LIKELY SAFE"
+        lines.append(
+            f"\033[93m{_BOLD}VERDICT: {label}{_RESET} (Grade {grade}, Score {score})"
+        )
+        if trusted:
+            lines.append(
+                f"  Trusted publisher — findings are likely false positives from binary/bundled analysis."
+            )
+            lines.append(f"  \033[92mclaude mcp add {name} -- <command>{_RESET}")
+        else:
+            lines.append(
+                f"  Minor issues found — review findings above before installing."
+            )
+            lines.append(f"  \033[93mclaude mcp add {name} -- <command>{_RESET}")
+    elif effective_grade in ("C", "C_trusted"):
+        label = "WARNING" if not trusted else "CAUTION"
+        lines.append(
+            f"\033[33m{_BOLD}VERDICT: {label}{_RESET} (Grade {grade}, Score {score})"
+        )
+        if trusted:
+            lines.append(
+                f"  Trusted publisher but significant findings — review before installing."
+            )
+            lines.append(f"  \033[93mclaude mcp add {name} -- <command>{_RESET}")
+        else:
+            lines.append(
+                f"  Significant issues — apply deny rules and audit source code."
+            )
+    elif effective_grade == "D":
+        lines.append(
+            f"\033[91m{_BOLD}VERDICT: HIGH RISK{_RESET} (Grade {grade}, Score {score})"
+        )
+        lines.append(f"  Do NOT install without thorough manual review.")
+    else:
+        lines.append(
+            f"\033[91m{_BOLD}VERDICT: DANGER{_RESET} (Grade {grade}, Score {score})"
+        )
+        lines.append(f"  Do NOT install this MCP server.")
+
+    # Deny rules
+    deny = result.deny_rules()
+    if deny:
+        lines.append("")
+        lines.append(f"  Deny rules to add:")
+        for rule in deny[:10]:
+            lines.append(f"    {_DIM}{rule}{_RESET}")
+        if len(deny) > 10:
+            lines.append(f"    {_DIM}... and {len(deny) - 10} more{_RESET}")
+
+    return "\n".join(lines)
 
 
 def format_full_report(result: AuditResult) -> str:
@@ -379,10 +472,16 @@ def format_full_report(result: AuditResult) -> str:
             "Apply deny rules, restrict tool access, and audit the "
             "source code before use in production."
         )
+    elif grade == "D":
+        lines.append(
+            "> **HIGH RISK** — Many security issues detected. "
+            "Do NOT use without thorough manual review and strict deny rules. "
+            "Consider alternative MCP servers."
+        )
     else:
         lines.append(
             "> **DANGER** — Critical security issues detected. "
-            "Do NOT use this MCP server without thorough manual review. "
+            "Do NOT use this MCP server. "
             "Apply all deny rules and consider alternative servers."
         )
     lines.append("")
@@ -402,6 +501,6 @@ def format_full_report(result: AuditResult) -> str:
         lines.append("")
 
     lines.append("---")
-    lines.append("*Generated by MCP Shield v2*")
+    lines.append("*Generated by MCP Shield v3*")
 
     return "\n".join(lines)

@@ -1,0 +1,33 @@
+name: False Positive Report
+description: Report a false positive detection
+title: "[FP] "
+labels: ["false-positive"]
+body:
+  - type: input
+    id: rule_id
+    attributes:
+      label: Rule ID
+      description: The rule_id from the finding (e.g., shell_injection, ssrf_dynamic_url)
+      placeholder: "shell_injection"
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code that triggered the finding
+      description: The code snippet that was flagged
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: why_fp
+    attributes:
+      label: Why is this a false positive?
+      description: Explain why this code is safe
+    validations:
+      required: true
+  - type: input
+    id: mcp_server
+    attributes:
+      label: MCP Server (if applicable)
+      placeholder: "e.g., @anthropic/mcp-server-github"

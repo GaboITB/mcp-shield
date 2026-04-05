@@ -1,4 +1,4 @@
-"""Parameter Divergence Detector — MCP Shield v2.
+"""Parameter Divergence Detector — MCP Shield v3.
 
 Compares input_schema between static-analysis and live versions of
 the same tool. Flags new required params, changed types, removed
@@ -73,7 +73,9 @@ class ParamDivergenceDetector:
                 continue
 
             # --- Description change (rug pull indicator) ---
-            if base.description != live.description:
+            # Skip if baseline description is empty — the static extractor
+            # likely failed to find it, not a real divergence.
+            if base.description and base.description != live.description:
                 findings.append(
                     Finding(
                         rule_id="param_divergence",

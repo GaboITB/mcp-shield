@@ -1,4 +1,4 @@
-"""Verdict and grade computation for MCP Shield v2.
+"""Verdict and grade computation for MCP Shield v3.
 
 Ported from MCP Shield v1.1 compute_verdict() with added grade mapping.
 """
@@ -37,11 +37,12 @@ def compute_grade(total_score: int) -> Grade:
     """Map a total weighted score to a letter grade.
 
     Consistent with AuditResult.grade property in models.py:
-        0       -> A+
-        1-9     -> A
-        10-29   -> B
-        30-59   -> C
-        60+     -> F
+        0        -> A+
+        1-20     -> A
+        21-60    -> B
+        61-150   -> C
+        151-300  -> D
+        301+     -> F
 
     Args:
         total_score: Sum of finding weights (AuditResult.total_score).
@@ -51,10 +52,12 @@ def compute_grade(total_score: int) -> Grade:
     """
     if total_score == 0:
         return Grade.A_PLUS
-    if total_score < 10:
+    if total_score <= 20:
         return Grade.A
-    if total_score < 30:
+    if total_score <= 60:
         return Grade.B
-    if total_score < 60:
+    if total_score <= 150:
         return Grade.C
+    if total_score <= 300:
+        return Grade.D
     return Grade.F

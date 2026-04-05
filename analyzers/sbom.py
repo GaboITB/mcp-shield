@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
 
-_DEFAULT_AUDIT_DIR = str(Path.home() / ".config" / "mcp-shield" / "audits")
-AUDIT_DIR = Path(os.environ.get("MCP_AUDIT_DIR", _DEFAULT_AUDIT_DIR))
+from mcp_shield.core.paths import get_audit_dir
+
+AUDIT_DIR = Path(os.environ.get("MCP_AUDIT_DIR", str(get_audit_dir())))
 
 
-def generate_sbom(deps: dict, name: str) -> dict:
+def generate_sbom(deps: dict, name: str, *, quiet: bool = False) -> dict:
     """Generate a CycloneDX-simplified SBOM from a dependency dict.
 
     Args:
@@ -68,6 +70,10 @@ def generate_sbom(deps: dict, name: str) -> dict:
         json.dumps(sbom, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    print(f"    SBOM: {sbom_file} ({len(sbom['components'])} components)")
+    if not quiet:
+        print(
+            f"    SBOM: {sbom_file} ({len(sbom['components'])} components)",
+            file=sys.stderr,
+        )
 
     return sbom

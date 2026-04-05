@@ -1,4 +1,4 @@
-"""Approval workflow for MCP Shield v2.
+"""Approval workflow for MCP Shield v3.
 
 Interactive workflow to review audit findings, apply deny rules
 to Claude settings.json, and register approved MCPs.

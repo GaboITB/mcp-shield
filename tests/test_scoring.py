@@ -50,18 +50,22 @@ class TestGrade(unittest.TestCase):
 
     def test_a(self):
         self.assertEqual(compute_grade(1), Grade.A)
-        self.assertEqual(compute_grade(9), Grade.A)
+        self.assertEqual(compute_grade(20), Grade.A)
 
     def test_b(self):
-        self.assertEqual(compute_grade(10), Grade.B)
-        self.assertEqual(compute_grade(29), Grade.B)
+        self.assertEqual(compute_grade(21), Grade.B)
+        self.assertEqual(compute_grade(60), Grade.B)
 
     def test_c(self):
-        self.assertEqual(compute_grade(30), Grade.C)
-        self.assertEqual(compute_grade(59), Grade.C)
+        self.assertEqual(compute_grade(61), Grade.C)
+        self.assertEqual(compute_grade(150), Grade.C)
+
+    def test_d(self):
+        self.assertEqual(compute_grade(151), Grade.D)
+        self.assertEqual(compute_grade(300), Grade.D)
 
     def test_f(self):
-        self.assertEqual(compute_grade(60), Grade.F)
+        self.assertEqual(compute_grade(301), Grade.F)
         self.assertEqual(compute_grade(500), Grade.F)
 
     def test_model_grade_matches_verdict_grade(self):

@@ -1,4 +1,4 @@
-"""Path traversal detector for MCP Shield v2.
+"""Path traversal detector for MCP Shield v3.
 
 Detects file operations with unsanitized user-controlled paths:
 - Python: open(), pathlib.Path, os.path.join with user input (AST-based)
@@ -30,19 +30,52 @@ RE_PY_OS_REMOVE = re.compile(
     r"""\bos\.(remove|unlink|rmdir|makedirs|listdir|scandir)\s*\("""
 )
 
-# JS/TS patterns
+# JS/TS patterns -- comprehensive fs coverage
 RE_JS_FS_READ = re.compile(
-    r"""\bfs\w*\.(readFile|readFileSync|readdir|readdirSync|access|accessSync)\s*\("""
+    r"""\bfs\w*\.(readFile|readFileSync|readdir|readdirSync|"""
+    r"""access|accessSync|open|openSync|"""
+    r"""stat|statSync|lstat|lstatSync|fstat|"""
+    r"""realpath|realpathSync|"""
+    r"""exists|existsSync)\s*\("""
 )
 RE_JS_FS_WRITE = re.compile(
     r"""\bfs\w*\.(writeFile|writeFileSync|appendFile|appendFileSync|"""
     r"""createWriteStream|createReadStream|mkdir|mkdirSync|"""
-    r"""unlink|unlinkSync|rmdir|rmdirSync|rm|rmSync)\s*\("""
+    r"""unlink|unlinkSync|rmdir|rmdirSync|rm|rmSync|"""
+    r"""rename|renameSync|copyFile|copyFileSync|"""
+    r"""symlink|symlinkSync|link|linkSync|"""
+    r"""chmod|chmodSync|chown|chownSync|"""
+    r"""truncate|truncateSync)\s*\("""
 )
 RE_JS_PATH_JOIN = re.compile(r"""\bpath\.(?:join|resolve)\s*\(""")
 RE_JS_FS_PROMISES = re.compile(
-    r"""\bfs\.promises\.(readFile|writeFile|readdir|unlink|rmdir|mkdir|access)\s*\("""
+    r"""\bfs\.promises\.(readFile|writeFile|readdir|unlink|rmdir|mkdir|access|"""
+    r"""open|stat|lstat|realpath|rename|copyFile|symlink|link|chmod|chown|truncate)\s*\("""
 )
+
+# Express/Koa/Hono static file serving
+RE_JS_STATIC_SERVE = re.compile(
+    r"""\b(?:express\.static|serve[-_]?[Ss]tatic|"""
+    r"""ctx\.sendFile|c\.file|res\.sendFile|res\.download|"""
+    r"""res\.attachment|Koa\.send|send)\s*\("""
+)
+
+# File upload libraries (multer, formidable, busboy)
+RE_JS_UPLOAD = re.compile(r"""\b(?:multer|formidable|busboy|Busboy)\s*\(""")
+RE_JS_UPLOAD_DEST = re.compile(
+    r"""\b(?:dest|destination|uploadDir|upload_dir|savePath)\s*[:=]"""
+)
+
+# Deno file APIs
+RE_JS_DENO_FS = re.compile(
+    r"""\bDeno\.(?:readFile|readTextFile|writeFile|writeTextFile|"""
+    r"""open|create|mkdir|remove|rename|stat|lstat|"""
+    r"""readDir|copyFile|symlink|link|chmod|chown|truncate|"""
+    r"""readLink|makeTempDir|makeTempFile)\s*\("""
+)
+
+# Bun file APIs
+RE_JS_BUN_FS = re.compile(r"""\bBun\.(?:file|write)\s*\(""")
 
 # User input indicators
 RE_PY_USER_INPUT = re.compile(
@@ -84,9 +117,7 @@ PY_EXTENSIONS = {".py", ".pyw"}
 JS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"}
 
 
-def _ext(path: str) -> str:
-    dot = path.rfind(".")
-    return path[dot:].lower() if dot != -1 else ""
+from mcp_shield.detectors.code._utils import file_ext as _ext  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +340,7 @@ class PathTraversalDetector:
             visitor = _PathTraversalVisitor(content, has_sanitization)
             visitor.visit(tree)
             return visitor.findings
-        except SyntaxError:
+        except (SyntaxError, RecursionError):
             return self._scan_python_regex(content, has_sanitization)
 
     def _scan_python_regex(self, content: str, has_sanitization: bool) -> list[Finding]:
@@ -359,6 +390,9 @@ class PathTraversalDetector:
             if stripped.startswith("//") or stripped.startswith("*"):
                 continue
 
+            has_user_input = RE_JS_USER_INPUT.search(line)
+
+            # Node.js fs operations
             has_file_op = (
                 RE_JS_FS_READ.search(line)
                 or RE_JS_FS_WRITE.search(line)
@@ -366,9 +400,27 @@ class PathTraversalDetector:
             )
             has_path_join = RE_JS_PATH_JOIN.search(line)
 
-            if (has_file_op or has_path_join) and RE_JS_USER_INPUT.search(line):
+            # Deno/Bun file operations
+            has_deno_fs = RE_JS_DENO_FS.search(line)
+            has_bun_fs = RE_JS_BUN_FS.search(line)
+
+            # Static file serving (express.static, res.sendFile, ctx.sendFile)
+            has_static_serve = RE_JS_STATIC_SERVE.search(line)
+
+            any_file_op = has_file_op or has_deno_fs or has_bun_fs or has_static_serve
+
+            if (any_file_op or has_path_join) and has_user_input:
                 severity = Severity.MEDIUM if has_sanitization else Severity.HIGH
-                op_type = "File operation" if has_file_op else "path.join/resolve"
+                if has_static_serve:
+                    op_type = "Static file serve"
+                elif has_deno_fs:
+                    op_type = "Deno file operation"
+                elif has_bun_fs:
+                    op_type = "Bun file operation"
+                elif has_file_op:
+                    op_type = "File operation"
+                else:
+                    op_type = "path.join/resolve"
                 findings.append(
                     Finding(
                         rule_id="path_traversal",
@@ -385,14 +437,29 @@ class PathTraversalDetector:
                     )
                 )
 
-            # Also flag path.join with user input even without immediate fs call
-            # (the result is often used later)
-            if has_path_join and RE_JS_USER_INPUT.search(line) and not has_file_op:
-                # Already flagged above, skip duplicate
-                pass
+            # Upload destination with user input
+            if RE_JS_UPLOAD_DEST.search(line) and has_user_input:
+                already = any(f.location == f"line {i}" for f in findings)
+                if not already:
+                    findings.append(
+                        Finding(
+                            rule_id="path_traversal",
+                            severity=(
+                                Severity.MEDIUM if has_sanitization else Severity.HIGH
+                            ),
+                            surface=Surface.SOURCE_CODE,
+                            title="Upload destination with user-controlled path",
+                            evidence=stripped[:200],
+                            location=f"line {i}",
+                            detail=(
+                                "File upload destination derived from user input "
+                                "enables writing files to arbitrary locations."
+                            ),
+                        )
+                    )
 
             # Detect direct string concatenation for paths with user input
-            if RE_DOTDOT.search(line) and RE_JS_USER_INPUT.search(line):
+            if RE_DOTDOT.search(line) and has_user_input:
                 already = any(f.location == f"line {i}" for f in findings)
                 if not already:
                     findings.append(

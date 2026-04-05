@@ -95,7 +95,7 @@ class DescriptionHeuristicDetector:
         if not description or not description.strip():
             findings.append(
                 Finding(
-                    rule_id="description_oversized",
+                    rule_id="description_empty",
                     severity=Severity.MEDIUM,
                     surface=Surface.MCP_METADATA,
                     title="Empty tool description",
