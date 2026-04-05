@@ -274,7 +274,7 @@ mcp-shield scan ./my-mcp --name my-mcp --format html -o report.html
 ### GitHub Action
 
 ```yaml
-- uses: GaboITB/mcp-shield@v2
+- uses: GaboITB/mcp-shield@v3
   with:
     source: ./my-mcp-server
     name: my-mcp
