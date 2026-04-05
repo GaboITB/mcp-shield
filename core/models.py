@@ -146,10 +146,16 @@ class Finding:
     evidence: str
     location: str  # file:line OR tool_name OR endpoint
     detail: str = ""
+    confidence: float = 0.8  # 0.0-1.0, default "probable"
 
     @property
     def weight(self) -> int:
         return SEVERITY_WEIGHTS.get(self.rule_id, 0)
+
+    @property
+    def effective_weight(self) -> float:
+        """Weight adjusted by confidence for scoring."""
+        return self.weight * self.confidence
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,7 +9,9 @@ Detects credentials and sensitive values embedded in source code:
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 from mcp_shield.core.models import Finding, Severity, Surface
@@ -61,15 +63,16 @@ RE_SLACK_TOKEN = re.compile(r"""xox[bpsar]-[A-Za-z0-9\-]{10,}""")
 RE_DISCORD_TOKEN = re.compile(
     r"""[MN][A-Za-z0-9]{23,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}"""
 )
-RE_OPENAI_KEY = re.compile(r"""sk-[A-Za-z0-9]{20,}""")
+RE_OPENAI_KEY = re.compile(r"""sk-(?!live_|test_)[A-Za-z0-9]{20,}""")
 RE_TWILIO_SID = re.compile(r"""(?:AC|SK)[a-f0-9]{32}""")
 RE_SENDGRID_KEY = re.compile(r"""SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}""")
 RE_NPM_TOKEN = re.compile(r"""npm_[A-Za-z0-9]{36}""")
 RE_PYPI_TOKEN = re.compile(r"""pypi-[A-Za-z0-9]{50,}""")
 RE_GITLAB_TOKEN = re.compile(r"""glpat-[A-Za-z0-9_\-]{20,}""")
-RE_HEROKU_KEY = re.compile(
-    r"""[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"""
-)
+# Disabled: too generic, causes FP
+# RE_HEROKU_KEY = re.compile(
+#     r"""[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"""
+# )
 RE_GCP_SERVICE_ACCOUNT = re.compile(
     r""""type"\s*:\s*"service_account"[\s\S]{0,2000}"private_key"[\s\S]{0,500}-----BEGIN""",
 )
@@ -77,7 +80,8 @@ RE_AZURE_KEY = re.compile(r"""[A-Za-z0-9+/]{86}==""")
 RE_SHOPIFY_KEY = re.compile(r"""shpat_[a-fA-F0-9]{32}""")
 RE_TELEGRAM_BOT = re.compile(r"""\b\d{8,10}:[A-Za-z0-9_-]{35}\b""")
 RE_MAILGUN_KEY = re.compile(r"""key-[a-zA-Z0-9]{32}""")
-RE_ALGOLIA_KEY = re.compile(r"""[a-f0-9]{32}""")  # too generic alone, used with context
+# Disabled: too generic, causes FP
+# RE_ALGOLIA_KEY = re.compile(r"""[a-f0-9]{32}""")
 
 # Deno env patterns
 RE_DENO_ENV = re.compile(r"""\bDeno\.env\.(?:get|toObject)\s*\(""")
@@ -136,7 +140,8 @@ RE_SENSITIVE_FILE = re.compile(
 RE_PLACEHOLDER = re.compile(
     r"""(?:YOUR[_\s]?\w+|"""
     r"""REPLACE[_\s]?ME|CHANGE[_\s]?ME|TODO|FIXME|XXX|"""
-    r"""example|placeholder|dummy|test|fake|mock|sample|"""
+    r"""example|placeholder|dummy|sample|"""
+    r"""^test$|^fake$|^mock$|test_value|fake_value|mock_value|_test_|_fake_|_mock_|"""
     r"""<[^>]+>|\$\{[^}]+\}|%\([^)]+\)|None|null|undefined|"""
     r"""process\.env|os\.environ|os\.getenv|"""
     r"""\.{3,}|xxx+|yyy+|zzz+)""",
@@ -178,9 +183,21 @@ SCANNABLE_EXTENSIONS = {
 from mcp_shield.detectors.code._utils import file_ext as _ext  # noqa: E402
 
 
+def _shannon_entropy(s: str) -> float:
+    """Calculate Shannon entropy of a string (bits per character)."""
+    if not s:
+        return 0.0
+    counts = Counter(s)
+    length = len(s)
+    return -sum((freq / length) * math.log2(freq / length) for freq in counts.values())
+
+
 def _is_placeholder(value: str) -> bool:
     """Check if a value looks like a placeholder or template variable."""
     if len(value) < MIN_SECRET_LENGTH:
+        return True
+    # Low Shannon entropy → likely a placeholder, not a real secret
+    if _shannon_entropy(value) < 3.0:
         return True
     return bool(RE_PLACEHOLDER.search(value))
 
@@ -284,6 +301,14 @@ class SecretsDetector:
         findings: list[Finding] = []
         lines = content.splitlines()
 
+        # Patterns with a fixed recognizable prefix: skip placeholder check entirely
+        # (the prefix itself is specific enough; only entropy matters for the suffix)
+        _STRUCTURED_PREFIX_RE = re.compile(
+            r"^(?:AKIA|ASIA|gh[pousr]_|eyJ|-----BEGIN|"
+            r"(?:sk|pk|rk)_(?:live|test)_|xox[bpsar]-|"
+            r"SG\.|npm_|pypi-|glpat-|shpat_|key-)",
+        )
+
         pattern_checks = [
             (RE_AWS_KEY, "AWS access key", Severity.CRITICAL),
             (RE_GITHUB_TOKEN, "GitHub token", Severity.CRITICAL),
@@ -312,7 +337,14 @@ class SecretsDetector:
                 match = pattern.search(line)
                 if match:
                     matched_text = match.group(0)
-                    if not _is_placeholder(matched_text):
+                    # For tokens with a structured prefix (Stripe sk_test_, etc.),
+                    # skip the generic placeholder filter — the prefix is already specific.
+                    # For others, apply normal placeholder filtering.
+                    is_structured = bool(_STRUCTURED_PREFIX_RE.match(matched_text))
+                    should_skip = (
+                        _is_placeholder(matched_text) if not is_structured else False
+                    )
+                    if not should_skip:
                         findings.append(
                             Finding(
                                 rule_id="secrets_hardcoded",
@@ -328,6 +360,54 @@ class SecretsDetector:
                                 ),
                             )
                         )
+
+            # GCP service account — only flag with context keywords
+            _GCP_CTX = re.compile(r"""gcp|google|service.?account""", re.IGNORECASE)
+            if _GCP_CTX.search(line):
+                match = RE_GCP_SERVICE_ACCOUNT.search(content)
+                if match and not _is_placeholder(match.group(0)):
+                    # Avoid duplicate findings for the same block
+                    already = any(
+                        f.rule_id == "secrets_hardcoded" and "GCP" in f.title
+                        for f in findings
+                    )
+                    if not already:
+                        findings.append(
+                            Finding(
+                                rule_id="secrets_hardcoded",
+                                severity=Severity.CRITICAL,
+                                surface=Surface.SOURCE_CODE,
+                                title="GCP service account private key detected",
+                                evidence=stripped[:200],
+                                location=f"line {i}",
+                                detail=(
+                                    "A GCP service account private key was found in source code. "
+                                    "Rotate this credential immediately and use "
+                                    "environment variables or a secrets manager."
+                                ),
+                            )
+                        )
+
+            # Azure storage key — only flag with context keywords
+            _AZURE_CTX = re.compile(r"""azure|storage""", re.IGNORECASE)
+            if _AZURE_CTX.search(line):
+                match = RE_AZURE_KEY.search(line)
+                if match and not _is_placeholder(match.group(0)):
+                    findings.append(
+                        Finding(
+                            rule_id="secrets_hardcoded",
+                            severity=Severity.CRITICAL,
+                            surface=Surface.SOURCE_CODE,
+                            title="Azure storage key detected",
+                            evidence=self._redact(stripped, match.group(0)),
+                            location=f"line {i}",
+                            detail=(
+                                "An Azure storage key was found in source code. "
+                                "Rotate this credential immediately and use "
+                                "environment variables or a secrets manager."
+                            ),
+                        )
+                    )
 
         return findings
 

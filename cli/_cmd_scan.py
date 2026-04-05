@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from mcp_shield import __version__
+from mcp_shield.core.models import Severity
 from mcp_shield.core.paths import get_audit_dir
 from mcp_shield.cli._layers import (
     run_bait_switch_layer,
@@ -301,6 +302,25 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"[~] Suppressed {before - after} finding(s): {', '.join(sorted(suppressed & actual_rules))}",
                 file=_log_stream,
             )
+
+    # -- Mode filter (default / --audit / --strict) ---------------------------
+    is_audit = getattr(args, "audit", False)
+    is_strict = getattr(args, "strict", False)
+    min_conf = getattr(args, "min_confidence", None)
+
+    if min_conf is not None:
+        result.findings = [f for f in result.findings if f.confidence >= min_conf]
+    elif is_strict:
+        # Strict: only HIGH+ with confidence >= 0.7
+        result.findings = [
+            f
+            for f in result.findings
+            if f.severity in (Severity.CRITICAL, Severity.HIGH) and f.confidence >= 0.7
+        ]
+    elif not is_audit:
+        # Default: hide findings with confidence < 0.5
+        result.findings = [f for f in result.findings if f.confidence >= 0.5]
+    # --audit: show everything (no filter)
 
     if is_full and not quiet:
         print(f"\n{'='*60}", file=_log_stream)

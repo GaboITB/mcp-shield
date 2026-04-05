@@ -57,7 +57,7 @@ RE_DENO_RUN = re.compile(r"""\bDeno\.run\s*\(""")
 RE_BUN_SPAWN = re.compile(r"""\bBun\.spawn\s*\(""")
 RE_BUN_SPAWN_SYNC = re.compile(r"""\bBun\.spawnSync\s*\(""")
 
-RE_SHELL_OPTION_JS = re.compile(r"""shell\s*:\s*true""", re.IGNORECASE)
+RE_SHELL_OPTION_JS = re.compile(r"""\bshell\s*:\s*true""", re.IGNORECASE)
 
 # Go patterns
 RE_EXEC_COMMAND_GO = re.compile(r"""\bexec\.Command\s*\(""")
@@ -67,8 +67,8 @@ RE_EXEC_COMMAND_GO = re.compile(r"""\bexec\.Command\s*\(""")
 # Force push patterns (dangerous git operations)
 # Excludes fs.rm/unlink/mkdir {force: true} which is unrelated to git
 RE_FORCE_PUSH = re.compile(
-    r"""(?:forcePush|force-push|--force\b|"""
-    r"""git\s+push\s+-f\b|updateReference.*force|"""
+    r"""(?:forcePush|force-push|"""
+    r"""git\s+push\s+.*--force\b|git\s+push\s+-f\b|updateReference.*force|"""
     r"""(?:push|createOrUpdateRef|updateRef)\s*\([^)]*force\s*:\s*true)""",
     re.IGNORECASE,
 )
@@ -84,6 +84,7 @@ RE_SANITIZE = re.compile(
 PY_EXTENSIONS = {".py", ".pyw"}
 JS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"}
 GO_EXTENSIONS = {".go"}
+SHELL_EXTENSIONS = {".sh", ".bash", ".zsh", ".fish"}
 
 
 from mcp_shield.detectors.code._utils import (
@@ -156,17 +157,16 @@ class _ShellTrueVisitor(ast.NodeVisitor):
     def _check_shell_kwarg(self, node: ast.Call) -> None:
         """Check if shell=True is present and classify severity."""
         for kw in node.keywords:
-            if (
-                kw.arg == "shell"
-                and isinstance(kw.value, ast.Constant)
-                and kw.value.value is True
-            ):
-                line_text = (
-                    self.lines[node.lineno - 1]
-                    if node.lineno <= len(self.lines)
-                    else ""
-                )
-                # Determine if command argument is dynamic
+            if kw.arg != "shell":
+                continue
+            line_text = (
+                self.lines[node.lineno - 1] if node.lineno <= len(self.lines) else ""
+            )
+            if isinstance(kw.value, ast.Constant):
+                if kw.value.value is not True:
+                    # shell=False or shell=0 -> safe, skip
+                    continue
+                # shell=True literal
                 dynamic = False
                 if node.args:
                     dynamic = self._arg_is_dynamic(node.args[0])
@@ -191,6 +191,23 @@ class _ShellTrueVisitor(ast.NodeVisitor):
                         detail=(
                             "subprocess with shell=True passes the command through "
                             "the system shell, enabling injection if input is unsanitized."
+                        ),
+                    )
+                )
+            else:
+                # shell=<variable or expression> — dynamic value, cannot determine at static analysis
+                self.findings.append(
+                    Finding(
+                        rule_id="shell_injection",
+                        severity=Severity.HIGH,
+                        surface=Surface.SOURCE_CODE,
+                        title="shell= with dynamic value",
+                        evidence=line_text.strip(),
+                        location=f"line {node.lineno}",
+                        detail=(
+                            "subprocess shell= argument is set to a variable or expression "
+                            "rather than a literal. If the value is True at runtime, commands "
+                            "will be passed through the system shell, enabling injection."
                         ),
                     )
                 )
@@ -226,8 +243,8 @@ class ShellInjectionDetector:
         elif ext in GO_EXTENSIONS:
             findings.extend(self._scan_go(path, content))
 
-        # Force push detection applies to all code file types
-        if ext in PY_EXTENSIONS | JS_EXTENSIONS | GO_EXTENSIONS:
+        # Force push detection applies to all code file types including shell
+        if ext in PY_EXTENSIONS | JS_EXTENSIONS | GO_EXTENSIONS | SHELL_EXTENSIONS:
             findings.extend(self._scan_force_push(content))
 
         return findings

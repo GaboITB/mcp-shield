@@ -123,6 +123,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ignore .mcpshieldignore files in scanned repos (prevents attacker-controlled exclusions)",
     )
+    scan_p.add_argument(
+        "--audit",
+        action="store_true",
+        help="Show all findings including low-confidence ones (default hides confidence < 0.5)",
+    )
+    scan_p.add_argument(
+        "--strict",
+        action="store_true",
+        help="Strict mode for CI/CD: only show HIGH+ findings with confidence >= 0.7",
+    )
+    scan_p.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help="Minimum confidence threshold (0.0-1.0) to include a finding",
+    )
 
     # --- sandbox (standalone) ---
     sandbox_p = sub.add_parser(

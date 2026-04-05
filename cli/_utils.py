@@ -164,6 +164,7 @@ def audit_result_from_dict(data: dict) -> "AuditResult":
                 evidence=fd["evidence"],
                 location=fd["location"],
                 detail=fd.get("detail", ""),
+                confidence=fd.get("confidence", 0.8),
             )
         )
 

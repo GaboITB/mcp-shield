@@ -420,6 +420,14 @@ class AuditEngine:
             deps_result.phantom = phantoms
             result.findings.extend(phantom_findings)
 
+            # Phase 5a: Typosquatting check
+            from mcp_shield.analyzers.typosquat import check_typosquat
+
+            typo_findings = check_typosquat(deps_result.deps)
+            if typo_findings:
+                result.findings.extend(typo_findings)
+                self._log(f"[!] {len(typo_findings)} potential typosquat(s) detected")
+
             # Phase 5b: Direct and transitive dependency audit
             from mcp_shield.analyzers.version_pin import (
                 run_dep_audit,
@@ -495,10 +503,34 @@ class AuditEngine:
             # Phase 10: Deduplicate + cap findings per rule_id
             result.findings = _dedup_and_cap(result.findings)
 
-            # Phase 11: Repo health
+            # Phase 11: Context refinement (reduce false positives)
+            self._log("[*] Refining findings with context analysis...")
+            from mcp_shield.core.file_classifier import classify_file
+            from mcp_shield.core.context_refiner import build_context, refine_findings
+
+            file_roles = {}
+            file_contents_map = {}
+            for filepath in files:
+                rel = str(filepath.relative_to(repo_path))
+                content = self._read_file(filepath)
+                file_roles[rel] = classify_file(rel, content)
+                file_contents_map[rel] = content
+
+            ctx = build_context(
+                repo_path=repo_path,
+                file_roles=file_roles,
+                file_contents=file_contents_map,
+            )
+            before_refine = len(result.findings)
+            result.findings = refine_findings(result.findings, ctx)
+            suppressed = before_refine - len(result.findings)
+            if suppressed > 0:
+                self._log(f"[+] Refined: {suppressed} false positive(s) suppressed")
+
+            # Phase 12: Repo health
             result.health = self._check_health(repo_path, files)
 
-            # Phase 12: AIVSS scoring
+            # Phase 13: AIVSS scoring
             from mcp_shield.scoring.aivss import compute_aivss
 
             result.aivss = compute_aivss(result.findings)
